@@ -13,7 +13,7 @@ In the following sections we're going into a walk-through in kubernetes networki
    * [Accessing services](#accessing-services)
 
 ## Pod Networking
-In a kubernetes cluster, when a pod is deployed, it gets an IP address from the cluster IP addresse range defined in the inital setup.
+In a kubernetes cluster, when a pod is deployed, it gets an IP address from the cluster IP address range defined in the inital setup.
 
 Starting form the ``nginx-pod1.yaml`` file
 ```yaml
@@ -39,47 +39,65 @@ Create a nginx pod
 
 To get the IP address of the pod
 
-    kubectl get pod nginx1 -o yaml | grep podIP
-    podIP: 172.30.41.2
+    kubectl get pod nginx1 -o wide
+    NAME          READY     STATUS    RESTARTS   AGE       IP           NODE
+    nginx1        1/1       Running   2          21s       10.38.3.29   kubew03
+
 
 Thanks to the kubernetes networking model, we can access pod IP from any node in the cluster
 
-      [root@kubem00 ~]# curl 172.30.41.2:80
-      
-      <!DOCTYPE html>
-      <html>
-      <head>
-      <title>Welcome to nginx!</title>
-      </head>
-      <body>
-      <h1>Welcome to nginx!</h1>
-      <p><em>Thank you for using nginx.</em></p>
-      </body>
-      </html>
+      curl 10.38.3.29:80
+      Welcome to nginx!
 
-Please that the containers are not using port 80 on the host node whee the container is running. This means we can run multiple nginx pods on the same node all using the same container port 80 and access them from any other pod or node in the cluster using their IP. Start a second nginx pod
+Please that the containers are not using port 80 on the host node where the container is running. This means we can run multiple nginx pods on the same node all using the same container port 80 and access them from any other pod or node in the cluster using their IP. Start a second nginx pod
 
     kubectl create -f nginx-pod2.yaml
     pod "nginx2" created
 
-    kubectl get pods
-    NAME      READY     STATUS    RESTARTS   AGE
-    nginx1    1/1       Running   0          12s
-    nginx2    1/1       Running   0          8s
-
-    kubectl get pods -l run=nginx -o yaml | grep podIP
-    podIP: 172.30.41.2
-    podIP: 172.30.41.3
+    kubectl get pods -o wide
+    NAME          READY     STATUS    RESTARTS   AGE       IP           NODE
+    nginx1        1/1       Running   0          21s       10.38.3.29   kubew03
+    nginx2        1/1       Running   0          21s       10.38.3.30   kubew03
 
 Both pods run on the same host node, as we see from their IP address. We can still access both pods from any other node in the cluster
 
-    [root@kubem00 ~]# curl 172.30.41.2:80
-    Welcome to nginx!
+      curl 10.38.3.29:80
+      Welcome to nginx!
     
-    [root@kubem00 ~]# curl 172.30.41.3:80
-    Welcome to nginx!
+      curl 10.38.3.30:80
+      Welcome to nginx!
 
-We do not need to expose container port on host to access nginx application as it is required in standard docker networking model. However we are not able to access nginx application from outside the kubernetes cluster. To achieve this we need to define a ngix service and expose the service to the external world.
+We do not need to expose container port on host to access nginx application as it is required in standard docker networking model.
+
+### Host Networking
+As alternative, we can define pods to use the same host IP address as defined in the ``nodejs-pod-hostnet.yaml`` configuration file
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nodejs
+  namespace:
+  labels:
+spec:
+  containers:
+  - name: nodejs
+    image: kalise/nodejs-web-app:latest
+    ports:
+    - containerPort: 8080
+  hostNetwork: true
+``` 
+
+Create the pod and check the IP address
+
+    kubectl create -f nodejs-pod-hostnet.yaml
+    
+    kubectl get pods -o wide
+    NAME          READY     STATUS    RESTARTS   AGE       IP           NODE
+    nginx1        1/1       Running   0          10m       10.38.3.29   kubew03
+    nginx2        1/1       Running   0          10m       10.38.3.30   kubew03
+    nodejs        1/1       Running   0          5m        10.10.10.83  kubew03
+
+However, with the ``hostNetwork: true`` we cannot start more than one pod listening on the same host port. In general, pods with host network are only used for system or daemon applications that do not need to be scaled.
 
 ## Exposing services
 In kubernetes, services are used not only to provides access to other pods inside the same cluster but also to clients outside the cluster. In this section, we're going to create a deploy of two nginx replicas and expose them to the external world via nginx service.
@@ -136,7 +154,7 @@ spec:
     run: nginx
 ```
 
-As we saw [before](https://github.com/kalise/Kubernetes-Tutorial/blob/master/content/core.md#services), any other pod in the cluster is able to access the nginx service without worring about pod IP addresses
+Any other pod in the cluster is able to access the nginx service without worring about pod IP addresses
 
     [root@kubem00 ~]# kubectl create -f busybox.yaml
     pod "busybox" created
@@ -145,7 +163,7 @@ As we saw [before](https://github.com/kalise/Kubernetes-Tutorial/blob/master/con
     / # wget -O - 10.254.247.153:80
     Welcome to nginx!
 
-However, the service is still not reachable from any cluster host. If we try to access the service we do not get anything
+However, the service is not reachable from any cluster host. If we try to access the service we do not get anything
 
     [root@kubem00 ~]# curl 10.254.247.153:80
     ^C
@@ -156,8 +174,8 @@ Without specifying the type of service, kubernetes by default uses the ``Type: C
 When creating a service, kubernetes has four options of service types:
 
    * **ClusterIP**: it exposes the service only on a cluster internal IP making the service only reachable from within the cluster. This is the default Service Type.
-   * **NodePort**: it exposes the service on each node public IP at a static port as defined in the NodePort option. It will be possible to access the service, from outside the cluster.
-   * **LoadBalancer**: it exposes the service externally using an external load balancer.
+   * **NodePort**: it exposes the service on each node public IP on a static port as defined in the NodePort option. It will be possible to access the service, from outside the cluster.
+   * **LoadBalancer**: it exposes the service by creating an external load balancer. It works only on some public cloud providers. *To make this working, remember to set the option ``--cloud-provider`` in the kube controller manager startup file*
    * **ExternalName**: it maps the service to the contents of the externalName option, e.g. search.google.com, by returning a name record with its value.
 
 In this section we are going to use the NodePort service type to expose the service.
@@ -543,3 +561,53 @@ This service will be accessible from all worker nodes in the cluster thanks to t
     Length: unspecified [text/html]
     Saving to: ‘index.html’
     2017-04-25 18:01:18 (3.45 MB/s) - ‘index.html’ saved [51713]
+
+## External Services
+The service abstraction in kubernetes can be used to model also external services that are not part of the cluster. For example, a pre-existing Oracle database can be modeled as a common standard service to be accessed from an application running in the cluster as pod. In this section, we are going to model an external MySQL database running on a remote machine with a given IP address. The only requirement is the worker nodes should be able to reach the address of the external database.
+
+An external service does not use label selectors since there are no pods to bind in the cluster. An external service definition file ``mysql-external-svc.yaml`` looks like the following
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-mysql
+  namespace:
+spec:
+  ports:
+  - port: 3306
+    protocol: TCP
+    targetPort: 3306
+  type: ClusterIP
+```
+
+Create the service 
+
+    kubectl create -f mysql-external-svc.yaml
+    
+    kubectl get services external-mysql -o wide
+    NAME             CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE       SELECTOR
+    external-mysql   10.32.107.128   <none>        3306/TCP   41m       <none>
+
+By inspecting the service, we find that no endpoints are available since it is an headless service. The endpoints need to be manually created as in the ``mysql-external-ep.yaml`` configuration file
+```yaml
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: external-mysql
+  namespace:
+subsets:
+- addresses:
+  - ip: 10.10.10.3
+  ports:
+  - port: 3306
+    protocol: TCP
+```
+
+The IP address above is the actual IP address of the MySQL server running outside the kubernetes cluster.
+
+To test the external MySQL server is modeled as an internal service in kubernetes, start a simple MySQL client running in a pod and connect to the external database by specifying the name of the external service as it is discovered by the embedded DNS in kubernetes
+
+    kubectl run -it --rm ephemeral --image=mysql -- /bin/sh -l
+    sh-4.2 $ mysql -h external-mysql -u root -p
+    MySQL [(none)]>
+    exit
