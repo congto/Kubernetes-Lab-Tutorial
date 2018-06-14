@@ -6,209 +6,17 @@ The purpose of Stateful Set is to provide a controller with the correct semantic
 
 A Stateful Set manages the deployment and scaling of a set of pods, and provides guarantees about the ordering and uniqueness of these pods. Like a Replica Set, a Stateful Set manages pods that are based on an identical container specifications. Unlike Replica Set, a Stateful Set maintains a sticky identity for each of pod across any rescheduling.
 
-In the example below, the ``apache-sts.yaml`` configuration file define a simple Stateful Set for an apache application made of two replicas
+For a Stateful Set with n replicas, when pods are deployed, they are created sequentially, in order from {0..n-1} with a sticky, unique identity in the form ``<statefulset name>-<ordinal index>``. The (i)th pod is not created until the (i-1)th is running. This ensure a predictable order of pod creation. Deletion of pods in stateful set follows the inverse order from {n-1..0}. However, if the order of pod creation is not strictly required, it is possible to creat pods in parallel by setting the ``podManagementPolicy: Parallel`` option. A Stateful Set can be scaled up and down ensuring the same order of creation and deletion.
 
-```yaml
----
-apiVersion: apps/v1beta2
-kind: StatefulSet
-metadata:
-  name: apache
-  namespace:
-  labels:
-    type: statefulset
-spec:
-  podManagementPolicy: OrderedReady
-  serviceName: web
-  replicas: 2
-  selector:
-    matchLabels:
-      app: apache
-  template:
-    metadata:
-      labels:
-        app: apache
-    spec:
-      containers:
-      - name: apache
-        image: centos/httpd:latest
-        ports:
-        - containerPort: 80
-          name: web
-```
-
-Create the stateful set and check the pod creation giving attention to the name of the pods and the order of creation
-
-    kubectl create -f _apache-sts.yaml
-    statefulset "apache" created
-
-    kubectl get sts
-    NAME      DESIRED   CURRENT   AGE
-    apache    2         2         51s
-    
-    kubectl get pods -o wide
-    NAME            READY     STATUS    RESTARTS   AGE       IP           NODE
-    apache-0        1/1       Running   0          1m        10.38.3.79   kubew03
-    apache-1        1/1       Running   0          58s       10.38.5.86   kubew05
-
-For a Stateful Set with n replicas, when pods are deployed, they are created sequentially, in order from {0..n-1} with a sticky, unique identity in the form ``<statefulset name>-<ordinal index>``. The (i)th pod is not created until the (i-1)th is running. This ensure a predictable order of pod creation. Deletion of pods in stateful set follows the inverse order from {n-1..0}. However, if the order of pod creation is not strictly required, it is possible to creat pods in parallel by setting the ``podManagementPolicy: Parallel`` option.
-
-A Stateful Set can be scaled up and down ensuring the same order of creation and deletion
-
-    kubectl scale sts apache --replicas=3
-
-    kubectl get pods -o wide
-    NAME            READY     STATUS    RESTARTS   AGE       IP           NODE
-    apache-0        1/1       Running   0          6m        10.38.3.79   kubew03
-    apache-1        1/1       Running   0          5m        10.38.5.86   kubew05
-    apache-2        1/1       Running   0          4m        10.38.3.80   kubew03
-
-A stateful set requires an headless service to control the domain of its pods. Here the headless service ``apache-headless-sts.yaml`` configuration file for the example above
-```yaml
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: web
-  labels:
-    app: apache
-spec:
-  ports:
-  - port: 80
-    name: web
-  clusterIP: None
-  selector:
-    app: apache
-```
-
-The domain managed by this service takes the form ``$(service name).$(namespace).svc.cluster.local``. 
-
-Create the service and check the pods domain name
-
-    kubectl create -f apache-headless-sts.yaml
-    service "web" created
-    
-    kubectl get svc
-    NAME                                    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   
-    web                                     ClusterIP   None            <none>        80/TCP
-
-    for i in $(seq -w 0 2); do kubectl exec apache-$i -- sh -c 'hostname -f'; done
-    apache-0.web.project.svc.cluster.local
-    apache-1.web.project.svc.cluster.local
-    apache-2.web.project.svc.cluster.local
-
-As each pod is created, it gets a matching service name, taking the form ``$(podname).$(service)``, where the service is defined by the service name field on the Stateful Set. This leads to a predictable service name surviving to pod deletions and restarts.
-
-Start a busybox shell and check the service resolution
-
-    kubectl exec -it busybox -- sh -c 'nslookup apache-0.web'
-    Server:    10.32.0.10
-    Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
-    Name:      apache-0.web
-    Address 1: 10.38.5.87
-
-    kubectl exec -it busybox -- sh -c 'nslookup apache-1.web'
-    Server:    10.32.0.10
-    Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
-    Name:      apache-1.web
-    Address 1: 10.38.3.81
-
-    kubectl exec -it busybox -- sh -c 'nslookup apache-2.web'
-    Server:    10.32.0.10
-    Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
-    Name:      apache-2.web
-    Address 1: 10.38.3.82
-
-The example above does not provide storage persistence across pod deletions and restarts. To achieve persistance of data, as required in a stateful application, the Stateful Set leverages on the Persistant Volume Claim model on a shared storage environment. Here the ``apache-sts-pvc.yaml`` configuration file adding data persistance to the example above
-
-```yaml
----
-apiVersion: apps/v1beta2
-kind: StatefulSet
-metadata:
-  name: apache
-  namespace:
-  labels:
-    type: statefulset
-spec:
-  serviceName: web
-  replicas: 3
-  selector:
-    matchLabels:
-      app: apache
-  template:
-    metadata:
-      labels:
-        app: apache
-    spec:
-      containers:
-      - name: apache
-        image: centos/httpd:latest
-        ports:
-        - containerPort: 80
-          name: web
-  volumeClaimTemplates:
-  - metadata:
-      name: www
-    spec:
-      accessModes:
-        - ReadWriteOnce
-      resources:
-        requests:
-          storage: 1Gi
-      storageClassName: default
-```
-
-The file assumes a default storage class already set and configured.
-
-Delete the previous instance of stateful set and create the new one
-
-    kubectl delete -f apache-sts.yaml
-    kubectl create -f apache-sts-pvc.yaml
-
-Each pod in the stateful set will claim for a volume where to store its persistent data.
-
-    kubectl get pods -o wide
-    NAME            READY     STATUS    RESTARTS   AGE       IP           NODE
-    apache-0        1/1       Running   0          5m        10.38.3.83   kubew03
-    apache-1        1/1       Running   0          4m        10.38.5.88   kubew05
-    apache-2        1/1       Running   0          4m        10.38.3.84   kubew03
-
-    kubectl get pvc
-    NAME                  STATUS    VOLUME          CAPACITY   ACCESS MODES   STORAGECLASS 
-    www-apache-0          Bound     pvc-1789513b2   2Gi        RWO            default  
-    www-apache-1          Bound     pvc-306a1f362   2Gi        RWO            default 
-    www-apache-2          Bound     pvc-484a031f2   2Gi        RWO            default 
-
-For each pod, write the index.html file and check that the pod serves its own page
-
-    for i in $(seq -w 0 2); \
-      do \
-        kubectl exec apache-$i -- sh -c 'echo Welcome from $(hostname) > /var/www/html/index.html'; \
-      done
-
-    for i in $(seq -w 0 2); do kubectl exec -it apache-$i -- curl localhost; done
-    Welcome from apache-0
-    Welcome from apache-1
-    Welcome from apache-2
-
-The example above can be scaled up and down preserving the identity of each pod along with their persistant data.
+A stateful set requires an headless service to control the domain of its pods. The domain managed by this service takes the form ``$(service name).$(namespace).svc.cluster.local``.  As each pod is created, it gets a matching service name, taking the form ``$(podname).$(service)``, where the service is defined by the service name field on the Stateful Set. This leads to a predictable service name surviving to pod deletions and restarts.
 
 ## Deploy a Consul cluster
-HashiCorp Consul is a distributed key-value store with service discovery. Consul is based on the Raft alghoritm for distributed consensus. Details about Consul and how to configure and use it can be found on the product documentation.
+**Consul** is a distributed key-value store with service discovery. Consul is based on the **Raft** alghoritm for distributed consensus. Details about Consul and how to configure and use it can be found on the product documentation.
 
-The most difficult part to run a Consul cluster on Kubernetes is how to form a cluster having Consul strict requirements about instance names of nodes being part of it. In this section we are going to deploy a three node Consul cluster by using the stateful set controller.
+The most difficult part to run a Consul cluster on Kubernetes is how to form a cluster having Consul strict requirements about instance names of nodes being part of it. In this section we are going to deploy a three node Consul cluster by using the stateful set controller. This is only an example, and you can easily extend it to the distributed datastore of your choice like **MongoDB**, **RethinkDB** or **Cassandra**, just to name few.
 
 ### Prerequisites
 We assume a persistent shared storage environment is available to the kubernetes cluster. This is because each Consul node uses a data directory where to store the status of the cluster and this directory needs to be preserved across pod deletions and restarts. A default storage class needs to be created before to try to implement this example.
-
-### Configuration files
-Configuration files for this example are available [here](https://github.com/kalise/consul-sts).
-
-Clone the repo
-
-    git clone https://github.com/kalise/consul-sts
-    cd consul-sts
 
 ### Bootstrap the cluster
 First define a headless service for the Stateful Set as in the ``consul-svc.yaml`` configuration file
@@ -244,7 +52,6 @@ spec:
 
 Then define a Stateful Set for the Consul cluster as in the ``consul-sts.yaml`` configuration file
 ```yaml
----
 apiVersion: apps/v1beta2
 kind: StatefulSet
 metadata:
@@ -263,18 +70,27 @@ spec:
       labels:
         app: consul
     spec:
-      containers:
-      - name: consul
-        image: consul:latest
+      initContainers:
+      - name: consul-config-data
+        image: busybox:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c", "cp /readonly/consul.json /config && sed -i s/default/$(POD_NAMESPACE)/g /config/consul.json"]
         env:
-          - name: POD_IP
-            valueFrom:
-              fieldRef:
-                fieldPath: status.podIP
           - name: POD_NAMESPACE
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+        volumeMounts:
+        - name: readonly
+          mountPath: /readonly
+          readOnly: true
+        - name: config
+          mountPath: /config
+          readOnly: false
+      containers:
+      - name: consul
+        image: consul:1.0.2
+        imagePullPolicy: IfNotPresent
         ports:
         - name: rpc
           containerPort: 8300
@@ -287,34 +103,25 @@ spec:
         - name: dns
           containerPort: 8600
         volumeMounts:
-        - name: consuldata
+        - name: data
           mountPath: /consul/data
-        - name: configdata
+          readOnly: false
+        - name: config
           mountPath: /consul/config
+          readOnly: false
         args:
+        - consul
         - agent
-        - -server
-        - -datacenter=kubernetes
-        - -data-dir=/consul/data
-        - -log-level=trace
         - -config-file=/consul/config/consul.json
-        - -client=0.0.0.0
-        - -advertise=$(POD_IP)
-        - -advertise-wan=127.0.0.1
-        - -serf-wan-bind=127.0.0.1
-        - -bootstrap-expect=3
-        - -retry-join=consul-0.consul.$(POD_NAMESPACE).svc.cluster.local
-        - -retry-join=consul-1.consul.$(POD_NAMESPACE).svc.cluster.local
-        - -retry-join=consul-2.consul.$(POD_NAMESPACE).svc.cluster.local
-        - -domain=cluster.local
-        - -ui
       volumes:
-        - name: configdata
+        - name: readonly
           configMap:
-            name: consulconfigdata
+            name: consulconfig
+        - name: config
+          emptyDir: {}
   volumeClaimTemplates:
   - metadata:
-      name: consuldata
+      name: data
     spec:
       accessModes:
         - ReadWriteOnce
@@ -324,6 +131,10 @@ spec:
       storageClassName: default
 ```
 
+We notice the presence of an init container in the pod template in addition to the main Consul container. Both the containers, the init and the main container mount the same Consul configuration file in the form of the ConfigMap.
+
+The role of the init container is to copy the configuration file from the ConfigMap (read only) to a shared volume (read write) and then update the file according to the namespace where that pod is running. This is accomplished by accessing the pod metadata by the API server running in the Kubernetes Control Plane. This step is required because the discoverability of each Consul instance depends on the namespace where the instance is running, i.e. Consul instances running in different namespaces are named differently.  
+
 Create the headless service
 
     kubectl create -f consul-svc.yaml
@@ -332,13 +143,30 @@ Create the headless service
     NAME    TYPE       CLUSTER-IP EXTERNAL-IP PORT(S)                                        AGE  SELECTOR
     consul  ClusterIP  None       <none>      8300/TCP,8301/TCP,8302/TCP,8500/TCP,8600/TCP   25s  app=consul
 
-The presence of headless service, ensure node discovery for the Consul cluster.
+The service above exposes all the ports of the Consul instances and makes each instance discoverable by its predictable hostname in the form of ``$(statefulset name)-$(ordinal).$(service name).$(namespace).svc.cluster.local``. Thanks to the above headless service, all Consul pods will get a discoverable hostname. The presence of headless service, ensure node discovery for the Consul cluster.
 
-Create a Config Map for Consul configuration file
+Before to create the StatefulSet for the Consul cluster, we’ll create a ConfigMap containing a Consul configuration file. The file  ``consul.json`` contains all the settings parameters required by Consul to form a cluster of three Consul instances.
 
-    kubectl create configmap consulconfigdata --from-file=consul.json
+```json
+{
+  "datacenter": "kubernetes",
+  "log_level": "DEBUG",
+  "data_dir": "/consul/data",
+  "server": true,
+  "bootstrap_expect": 3,
+  "retry_join": ["consul-0.consul.default.svc.cluster.local","consul-1.consul.default.svc.cluster.local","consul-2.consul.default.svc.cluster.local"],
+  "client_addr": "0.0.0.0",
+  "bind_addr": "0.0.0.0",
+  "domain": "cluster.local",
+  "ui": true
+}
+```
+
+Create the Config Map for Consul configuration file
+
+    kubectl create configmap consulconfig --from-file=consul.json
     
-Create a Stateful Set of three nodes
+Create the Stateful Set of three nodes
 
     kubectl create -f consul-sts.yaml
 
@@ -353,10 +181,10 @@ The Consul pods will be created in a strict order with a predictable name
 Each pod creates its own volume where to store its data
 
     kubectl get pvc
-    NAME                  STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS 
-    consuldata-consul-0   Bound     pvc-7bf6c16e   2Gi        RWO            default 
-    consuldata-consul-1   Bound     pvc-951e3b17   2Gi        RWO            default
-    consuldata-consul-2   Bound     pvc-adfbf7ce   2Gi        RWO            default
+    NAME            STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS 
+    data-consul-0   Bound     pvc-7bf6c16e   2Gi        RWO            default 
+    data-consul-1   Bound     pvc-951e3b17   2Gi        RWO            default
+    data-consul-2   Bound     pvc-adfbf7ce   2Gi        RWO            default
     
 Consul cluster should be formed
 
@@ -371,10 +199,42 @@ and ready to be used by any other pod in the kubernetes cluster.
 Also each pod creates its own storage volume where to store its own copy of the distributed database
 
     kubectl get pvc
-    NAME                  STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-    consuldata-consul-0   Bound     pvc-e975189c   2Gi        RWO            default        1h
-    consuldata-consul-1   Bound     pvc-02461605   2Gi        RWO            default        1h
-    consuldata-consul-2   Bound     pvc-1ac2d8d5   2Gi        RWO            default        1h
+    NAME            STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+    data-consul-0   Bound     pvc-e975189c   2Gi        RWO            default        1h
+    data-consul-1   Bound     pvc-02461605   2Gi        RWO            default        1h
+    data-consul-2   Bound     pvc-1ac2d8d5   2Gi        RWO            default        1h
+
+
+### Delete a pod
+Now let’s to delete a pod 
+
+    kubectl delete pod consul-1
+    pod "consul-1" deleted
+
+while checking its status progression
+
+    kubectl get pod consul-1 -o wide --watch
+
+    NAME       READY     STATUS           RESTARTS   AGE       IP          NODE
+    consul-1   1/1       Running          0          1m        10.38.4.5   kubew04
+    consul-1   1/1       Terminating      0          1m        10.38.4.5   kubew04
+    consul-1   0/1       Pending          0          0s        <none>      kubew04
+    consul-1   0/1       Init:0/1         0          0s        <none>      kubew04
+    consul-1   0/1       PodInitializing  0          9s        10.38.4.6   kubew04
+    consul-1   1/1       Running          0          12s       10.38.4.6   kubew04
+
+As expected, a new pod is recreated with different IP address but with the same identity. Now check if the rescheduled pod is using the same previous storage volume
+
+    kubectl describe pod consul-1
+    ...
+    Volumes:
+      data:
+        Type:       PersistentVolumeClaim
+        ClaimName:  data-consul-1
+        ReadOnly:   false
+    ...
+
+As you can see, the rescheduled pod is using the same PersistentVolumeClaim as the previous one. Please, remember that deleting a pod in a StatefulSet does not delete the PersistentVolumeClaims used by that pod. This preserves the data persistence across pod deletion and rescheduling.
 
 ### Access the cluster from pods
 Create a simple curl shell in a pod from the ``curl.yaml`` file
@@ -403,14 +263,54 @@ Attach to the curl shell, create and retrieve a key/value pair in the Consul clu
     [{"LockIndex":0,"Key":"my-key","Flags":0,"Value":"bXktZGF0YQ==","CreateIndex":336,"ModifyIndex":349}]
     / # exit
 
-### Expose the cluster
-Consul provides a simple HTTP graphical interface on port 8500 for interact with it. To expose this interface to the external of the kubernetes cluster, define an service as in the ``consul-svc-ext.yaml`` configuration file
+### Scaling the cluster
+Scaling down a StatefulSet and then scaling it up is similar to deleting a pod and waiting for the StatefulSet to recreate it. Please, remember that scaling down a StatefulSet only deletes the pods, but leaves the PersistentVolumeClaims. Also, please, note that scaling down and scaling up is performed similar to how pods are created when the StatefulSet is created. When scaling down, the pod with the highest index is deleted first: only after that pod gets deleted, the pod with the second highest index is deleted, and so on.
+
+What is the expected behaviour scaling up the Consul cluster? Since the Consul cluster is based on the Raft algorithm, we have to scale up our 3 nodes cluster by 2 nodes at same time because an odd number of nodes is always required to form a healthy Consul cluster. We also expect a new PersistentVolumeClaim is created for each new pod.
+
+    kubectl scale sts consul --replicas=5
+    statefulset "consul" scaled
+
+By listing the pods, we see our Consul cluster gets scaled up.
+
+    kubectl get pods -o wide
+
+    NAME       READY     STATUS    RESTARTS   AGE       IP            NODE
+    consul-0   1/1       Running   0          5m        10.38.3.160   kubew03
+    consul-1   1/1       Running   0          5m        10.38.4.10    kubew04
+    consul-2   1/1       Running   0          4m        10.38.5.132   kubew05
+    consul-3   1/1       Running   0          1m        10.38.3.161   kubew03
+    consul-4   1/1       Running   0          1m        10.38.4.11    kubew04
+
+Check the membership of the scaled cluster
+
+    kubectl exec -it consul-0 -- consul members
+    Node      Address           Status  Type    Build  Protocol  DC          Segment
+    consul-0  10.38.3.160:8301  alive   server  1.0.2  2         kubernetes  <all>
+    consul-1  10.38.4.10:8301   alive   server  1.0.2  2         kubernetes  <all>
+    consul-2  10.38.5.132:8301  alive   server  1.0.2  2         kubernetes  <all>
+    consul-3  10.38.3.161:8301  alive   server  1.0.2  2         kubernetes  <all>
+    consul-4  10.38.4.11:8301   alive   server  1.0.2  2         kubernetes  <all>
+
+Also check the dynamic storage provisioner created the additional volumes
+
+    kubectl get pvc -o wide
+
+    NAME            STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+    data-consul-0   Bound     pvc-e975189c   2Gi        RWO            default        1h
+    data-consul-1   Bound     pvc-02461605   2Gi        RWO            default        1h
+    data-consul-2   Bound     pvc-1ac2d8d5   2Gi        RWO            default        1h
+    data-consul-3   Bound     pvc-adaa4d2d   2Gi        RWO            default        1h
+    data-consul-4   Bound     pvc-28feff1c   2Gi        RWO            default        1h
+
+### Exposing the cluster
+Consul provides a simple HTTP graphical interface on port 8500 for interact with it. To expose this interface to the external of the kubernetes cluster, define an service as in the ``consul-ui.yaml`` configuration file
 ```yaml
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: consul-ext
+  name: consul-ui
   labels:
     app: consul
 spec:
@@ -437,23 +337,25 @@ spec:
       paths:
       - path: /
         backend:
-          serviceName: consul-ext
+          serviceName: consul-ui
           servicePort: 8500
 ```
 
 Create the service and expose it
 
-    kubectl create -f consul-svc-ext.yaml
+    kubectl create -f consul-ui.yaml
     kubectl create -f consul-ingress.yaml
 
 Point the browser to the http://consul.cloud.example.com/ui to access the GUI.
 
 ### Cleanup everything
+To delete the Consul cluster, delete the StatefulSet in cascade mode. This will delete both the StatefulSet objects and all pods. Please remember that the order of pods deletion will be from the pod having the highest index. Also you will have to delete the PersistentVolumeClaims and then all PersistentVolumes but only in case of static storage provisioning. In our case, since we used the dynamic storage provisioner, all the PersistentVolumes will be deleted or retained according to the reclaim policy specified in the Storage Class.
+
 Remove every object create in the previous steps
 
     kubectl delete -f consul-ingress.yaml
     kubectl delete -f consul-svc-ext.yaml
     kubectl delete -f consul-sts.yaml
     kubectl delete -f consul-svc.yaml
-    kubectl delete pvc consuldata-consul-0 consuldata-consul-1 consuldata-consul-2
-    kubectl delete configmap consulconfigdata
+    kubectl delete pvc data-consul-0 data-consul-1 data-consul-2
+    kubectl delete configmap consulconfig

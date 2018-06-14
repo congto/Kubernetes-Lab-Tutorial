@@ -21,6 +21,10 @@ In this section we're going to introduce this model by using simple examples. Pl
   * [Manual volumes provisioning](#manual-volumes-provisioning)
   * [Storage Classes](#storage-classes)
   * [Dynamic volumes provisioning](#dynamic-volumes-provisioning)
+  * [Redis benchmark](#redis-benchmark)
+  * [Stateful Applications](./stateful.md)
+  * [Configure GlusterFS as Storage backend](./glusterfs.md)
+  * [Configure Ceph as Storage backend](./ceph.md)
 
 ## Local Persistent Volumes
 Start by defining a persistent volume ``local-persistent-volume-recycle.yaml`` configuration file
@@ -33,7 +37,7 @@ metadata:
   labels:
     type: local
 spec:
-  storageClassName: manual
+  storageClassName: ""
   capacity:
     storage: 2Gi
   accessModes:
@@ -53,7 +57,7 @@ and view information about it
 
     kubectl get pv
     NAME      CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS      CLAIM     STORAGECLASS   REASON    AGE
-    local     2Gi        RWO           Recycle         Available             manual                   33m
+    local     2Gi        RWO           Recycle         Available                                      33m
 
 Now, we're going to use the volume above by creating a claiming for persistent storage. Create the following ``volume-claim.yaml`` configuration file
 ```yaml
@@ -62,15 +66,15 @@ apiVersion: v1
 metadata:
   name: volume-claim
 spec:
-  storageClassName: manual
+  storageClassName: ""
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 500Mi
+      storage: 1Gi
 ```
 
-Note the claim is for 500MB of space where the the volume is 2GB. The claim will bound any volume meeting the minimum requirements specified into the claim definition. 
+Note the claim is for 1GB of space where the the volume is 2GB. The claim will bound any volume meeting the minimum requirements specified into the claim definition. 
 
 Create the claim
 
@@ -80,13 +84,13 @@ Check the status of persistent volume to see if it is bound
 
     kubectl get pv
     NAME      CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS    CLAIM                  STORAGECLASS   REASON    AGE
-    local     2Gi        RWO           Recycle         Bound     project/volume-claim   manual                   37m
+    local     2Gi        RWO           Recycle         Bound     project/volume-claim                            37m
 
 Check the status of the claim
 
     kubectl get pvc
     NAME           STATUS    VOLUME    CAPACITY   ACCESSMODES   STORAGECLASS   AGE
-    volume-claim   Bound     local     2Gi        RWO           manual         1m
+    volume-claim   Bound     local     2Gi        RWO                          1m
 
 Create a ``nginx-pod-pvc.yaml`` configuration file for a nginx pod using the above claim for its html content directory
 ```yaml
@@ -168,6 +172,8 @@ Claims and volumes use the same conventions when requesting storage with specifi
 
 A volume can only be mounted using one access mode at a time, even if it supports many. For example, a NFS volume can be mounted as ReadWriteOnce by a single node or ReadOnlyMany by many nodes, but not at the same time.
 
+Block based volumes, e.g. iSCSI and Fibre Channel cannot be mounted as ReadWriteMany at same type. The iSCSI and Fibre Channel volumes do not have any fencing mechanisms yet, so you must ensure the volumes are only used by one node at a time. In certain situations, such as draining a node, the volumes may be used simultaneously by two nodes. Before draining the node, first ensure the pods that use these volumes are deleted.
+
 ## Volume state
 When a pod claims for a volume, the cluster inspects the claim to find the volume meeting claim requirements and mounts that volume for the pod. Once a pod has a claim and that claim is bound, the bound volume belongs to the pod.
 
@@ -188,7 +194,7 @@ See the status of the volume
 
     kubectl get pv persistent-volume
     NAME      CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS      CLAIM     STORAGECLASS   REASON    AGE
-    local     2Gi        RWO           Recycle         Available             manual                   57m
+    local     2Gi        RWO           Recycle         Available                                      57m
 
 ## Volume Reclaim Policy
 When deleting a claim, the volume becomes available to other claims only when the volume claim policy is set to ``Recycle``. Volume claim policies currently supported are:
@@ -211,7 +217,7 @@ metadata:
   labels:
     type: local
 spec:
-  storageClassName: manual
+  storageClassName: ""
   capacity:
     storage: 2Gi
   accessModes:
@@ -240,7 +246,7 @@ and check the status of the volume
 
     kubectl get pv
     NAME           CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS     CLAIM                  STORAGECLASS     AGE
-    local-retain   2Gi        RWO           Retain          Released   project/volume-claim   manual           3m
+    local-retain   2Gi        RWO           Retain          Released   project/volume-claim                    3m
     
 We see the volume remain in the released status and not becomes available since the reclaim policy is set to ``Retain``. Now login to the worker node and check data are still there.
 
@@ -249,7 +255,7 @@ An administrator can manually reclaim the volume by deleteting the volume and cr
 ## Manual volumes provisioning
 In this section we're going to use a **Network File System** storage backend for manual provisioning of shared volumes. Main limit of local storage for container volumes is that storage area is tied to the host where it resides. If kubernetes moves the pod from another host, the moved pod is no more to access the data since local storage is not shared between multiple hosts of the cluster. To achieve a more useful storage backend we need to leverage on a shared storage technology like NFS.
 
-We'll assume a simple external NFS server ``fileserver``	sharing some folders. To make worker nodes able to consume these NFS shares, install the NFS client on all the worker nodes by ``yum install -y nfs-utils`` command.
+We'll assume a simple external NFS server ``fileserver`` sharing some folders. To make worker nodes able to consume these NFS shares, install the NFS client on all the worker nodes by ``yum install -y nfs-utils`` command.
 
 Define a persistent volume as in the ``nfs-persistent-volume.yaml`` configuration file
 ```yaml
@@ -258,13 +264,13 @@ kind: PersistentVolume
 metadata:
   name: nfs-volume
 spec:
-  storageClassName: manual
+  storageClassName: ""
   capacity:
     storage: 1Gi
   accessModes:
   - ReadWriteOnce
   nfs:
-    path: "/data"
+    path: "/mnt/nfs"
     server: fileserver
   persistentVolumeReclaimPolicy: Recycle
 ```
@@ -276,7 +282,7 @@ Create the persistent volume
 
     kubectl get pv nfs -o wide
     NAME        CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS      CLAIM     STORAGECLASS   REASON    AGE
-    nfs-volume  1Gi        RWO           Recycle         Available             manual                   7s
+    nfs-volume  1Gi        RWO           Recycle         Available                                      7s
 
 Thanks to the persistent volume model, kubernetes hides the nature of storage and its complex setup to the applications. An user need only to claim volumes for their pods without deal with storage configuration and operations.
 
@@ -288,11 +294,11 @@ Check the bound
 
     kubectl get pv
     NAME        CAPACITY   ACCESSMODES   RECLAIMPOLICY   STATUS    CLAIM                  STORAGECLASS   REASON    AGE
-    nfs-volume  1Gi        RWO           Recycle         Bound     project/volume-claim   manual                   5m
+    nfs-volume  1Gi        RWO           Recycle         Bound     project/volume-claim                            5m
 
     kubectl get pvc
     NAME           STATUS    VOLUME      CAPACITY   ACCESSMODES   STORAGECLASS   AGE
-    volume-claim   Bound     nfs-volume  1Gi        RWO           manual         9s
+    volume-claim   Bound     nfs-volume  1Gi        RWO                          9s
 
 Now we are going to create more nginx pods using the same claim.
 
@@ -378,15 +384,15 @@ apiVersion: v1
 metadata:
   name: pvc-volume-selector
 spec:
-  storageClassName: manual
+  storageClassName: ""
   accessModes:
     - ReadWriteMany
   resources:
     requests:
-      storage: 500Mi
+      storage: 1Gi
   selector:
     matchLabels:
-      volumeName: "share00"
+      volumeName: "share01"
 ```
 
 Create the claim
@@ -397,25 +403,23 @@ The claim remains pending because there are no matching volumes
 
 	kubectl get pvc
 	NAME                  STATUS    VOLUME    CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-	pvc-volume-selector   Pending                                       manual         5s
+	pvc-volume-selector   Pending                                                      5s
 	
 	kubectl get pv
 	NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM     
-	share00   1Gi        RWX            Recycle          Available             
 	share01   1Gi        RWX            Recycle          Available             
 	share02   1Gi        RWX            Recycle          Available             
 
-Pick the volume named ``share00`` and label it
+Pick the volume named ``share01`` and label it
 
-	kubectl label pv share00 volumeName="share00"
-	persistentvolume "share00" labeled
+	kubectl label pv share00 volumeName="share01"
+	persistentvolume "share01" labeled
 	
 And check if the claim bound the volume
 
 	kubectl get pv
 	NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM                         
-	share00   1Gi        RWX            Recycle          Bound       project/pvc-volume-selector   
-	share01   1Gi        RWX            Recycle          Available                                 
+	share01   1Gi        RWX            Recycle          Bound       project/pvc-volume-selector     
 	share02   1Gi        RWX            Recycle          Available                                 
 
 ## Storage Classes
@@ -472,132 +476,7 @@ Check the storage classes
 If the cluster administrator defines a default storage class, all claims that do not require any class will be dynamically bound to volumes having the default storage class. 
 
 ## Dynamic volumes provisioning
-In this section we're going to use a **GlusterFS** distributed storage backend for dynamic provisioning of shared volumes. We'll assume an external GlusterFS cluster made of three nodes providing a distributed and high available file system. Details on **GlusterFS** can be found [here](https://www.gluster.org/).
-
-### Setup the GlusterFS environment
-The GlusterFS cluster is made of three nodes:
-
-   * gluster00 with IP 10.10.10.120
-   * gluster01 with IP 10.10.10.121
-   * gluster02 with IP 10.10.10.122
-
-each one exposing two row devices: ``/dev/vg00/brick00`` and ``/dev/vg01/brick01"``.
-
-To manage the Gluster cluster storage, i.e. adding volumes, removing volumes, etc., we are going to install an additional **Heketi** server on one of the gluster node. As alternative, the **Heketi** can be installed on a stand-alone machine as system service or it can be deployed as container based service running on the same kubernetes cluster.
-
-Install the Heketi server and the cli client on one of the gluster node
-
-    yum install heketi heketi-client -y
-
-Create a ssh key pair
-
-    ssh-keygen -f /etc/heketi/heketi_key -t rsa -N ''
-
-set the ownership of the key pair
-
-    chown heketi:heketi /etc/heketi/heketi_key*
-    
-and install the public key on each gluster node
-
-    ssh-copy-id -i /etc/heketi/heketi_key.pub root@gluster00
-    ssh-copy-id -i /etc/heketi/heketi_key.pub root@gluster01
-    ssh-copy-id -i /etc/heketi/heketi_key.pub root@gluster02
-
-Now configure the Heketi server by editing the ``/etc/heketi/heketi.json`` configuration file as following
-```
-...
-  "_port_comment": "Heketi Server Port Number",
-  "port": "8080",
-...
-    "executor": "ssh",
-    "_sshexec_comment": "SSH username and private key file information",
-    "sshexec": {
-      "keyfile": "/etc/heketi/heketi_key",
-      "user": "root",
-      "port": "22",
-      "fstab": "/etc/fstab"
-    },
-...
-    "_db_comment": "Database file name",
-    "db": "/var/lib/heketi/heketi.db",
-...
-```
-
-Start and enable the Heketi service
-
-    systemctl restart heketi
-    systemctl enable heketi
-
-Make sure the Heketi server hostname is resolved and check the connection
-
-    curl http://heketi:8080/hello
-    Hello from Heketi
-
-A topology file is used to tell Heketi about the environment and what nodes and devices it has to manage. Create a ``topology.json`` configuration file describing all nodes in the cluster topology
-```json
-{
-   "clusters":[
-      {
-         "nodes":[
-            {
-               "node":{
-                  "hostnames":{
-                     "manage":[
-                        "gluster00"
-                     ],
-                     "storage":[
-                        "10.10.10.120"
-                     ]
-                  },
-                  "zone":1
-               },
-               "devices":[
-                  "/dev/vg00/brick00",
-                  "/dev/vg01/brick01"
-               ]
-            },
-// other nodes here ...
-```
-
-Load the cluster topology into Heketi by the Heketi cli
-
-	heketi-cli --server http://heketi:8080 topology load --json=topology.json
-	
-	Creating cluster ... ID: 88fa719937edf4b3b3822b4abf825c6b
-        Creating node gluster00 ... ID: db2f0baad1bbb5868f8e65f82e7ca905
-                Adding device /dev/vg00/brick00 ... OK
-                Adding device /dev/vg01/brick01 ... OK
-        Creating node gluster01 ... ID: 43fa07bc2c2156c98c1f959860cf94b1
-                Adding device /dev/vg00/brick00 ... OK
-                Adding device /dev/vg01/brick01 ... OK
-        Creating node gluster02 ... ID: e93ba25f09c74938064bfaca0d5697fe
-                Adding device /dev/vg00/brick00 ... OK
-                Adding device /dev/vg01/brick01 ... OK
-
-
-Check the cluster has been created
-
-	heketi-cli --server http://heketi:8080 cluster list
-	Clusters: 88fa719937edf4b3b3822b4abf825c6b
-	
-	heketi-cli --server http://heketi:8080 node list
-	Id:43fa07bc2c2156c98c1f959860cf94b1     Cluster:88fa719937edf4b3b3822b4abf825c6b
-	Id:db2f0baad1bbb5868f8e65f82e7ca905     Cluster:88fa719937edf4b3b3822b4abf825c6b
-	Id:e93ba25f09c74938064bfaca0d5697fe     Cluster:88fa719937edf4b3b3822b4abf825c6b
-
-
-Create a gluster volume to verify Heketi:
-
-	heketi-cli --server http://heketi:8080 volume create --size=1
-	Name: vol_7ce4d0cbc77fe36b84ca26a5e4172dbe
-	Size: 1
-	Volume Id: 7ce4d0cbc77fe36b84ca26a5e4172dbe
-	Cluster Id: 88fa719937edf4b3b3822b4abf825c6b
-	Mount: 10.10.10.120:vol_7ce4d0cbc77fe36b84ca26a5e4172dbe
-	Mount Options: backup-volfile-servers=10.10.10.121,10.10.10.122
-	Durability Type: replicate
-	Distributed+Replica: 3
-
+In this section we're going to use a **GlusterFS** distributed storage backend for dynamic provisioning of shared volumes. We'll assume an external GlusterFS cluster made of three nodes providing a distributed and high available file system.
 
 ### Dynamically Provision a GlusterFS volume
 Define a storage class for the gluster provisioner
@@ -696,3 +575,144 @@ In the same way, the gluster volume is dynamically removed when the claim is rem
 	kubectl delete pvc apache-volume-claim
 	kubectl get pvc,pv
 	No resources found.
+
+## Redis benchmark
+In this section, we are going to use persistent storage as a backend for a Redis server. Redis is an open source, in-memory data structure store, used as a database, cache and message broker. Redis provides different levels of on-disk persistence. Redis is famous for its performances and, therefore, we are going to run a Redis benchmark having persistence on a persistence volume.
+
+### Create a persistent volume claim
+Make sure a default Storage Class is defined and create a claim for data as in the ``redis-data-claim.yaml`` configuration file
+```yaml
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: redis-data-claim
+spec:
+  storageClassName: default
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+Create the claim and check the dynamic volume creation and the binding
+
+	kubectl create -f redis-data-claim.yaml
+	
+	kubectl get pvc
+	NAME                     STATUS    VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS        AGE
+	redis-data-claim         Bound     pvc-eaab62e3   10Gi       RWO            default             1m
+
+### Create a Redis Master
+Define a Redis Master deployment as in the ``redis-deployment.yaml`` configuration file
+```yaml
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: redis-deployment
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: redis
+        role: master
+      name: redis
+    spec:
+      containers:
+        - name: redis
+          image: kubernetes/redis:v1
+          env:
+            - name: MASTER
+              value: "true"
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - mountPath: /redis-master-data
+              name: redis-data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data-claim
+```
+
+Define a Redis service as in the ``redis-service.yaml`` configuration file
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    nodePort: 31079
+    name: http
+  type: NodePort
+  selector:
+    name: redis
+```
+
+Deploy the Redis Master and create the service
+
+	kubectl create -f redis-deployment.yaml
+	kubectl create -f redis-service.yaml
+
+Wait the Redis pod is ready
+
+	kubectl get pods -a -o wide
+	NAME                                READY     STATUS      RESTARTS   AGE       IP             NODE
+	redis-deployment-75466795f6-thtx4   1/1       Running     0          30s       10.38.5.62     kubew05
+
+To verify Redis, install the ``netcat`` utility and connect to the Redis Master
+
+	yum install -y nmap-ncat
+
+	nc -v kubew05 31079
+	Ncat: Version 6.40 
+	Ncat: Connected to kubew05:31079.
+	ping
+	+PONG
+	set greetings "Hello from Redis!"
+	+OK
+	get greetings
+	$17
+	Hello from Redis!
+	logout
+
+### Run benchmark
+Define a job running the Redis performances benchmark as in the ``redis-benchmark.yaml`` configuration file
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-bench
+spec:
+  template:
+    metadata:
+      name: bench
+    spec:
+      containers:
+      - name: bench
+        image: clue/redis-benchmark
+      restartPolicy: Never
+```
+
+Create a batch job to run the benchmark
+
+	kubectl create -f redis-benchmark.yaml
+
+Wait the job completes
+
+	kubectl get job
+	NAME          DESIRED   SUCCESSFUL   AGE
+	redis-bench   1         1            48s
+
+Check the bench pod name and display the results
+
+	kubectl get pods -a
+	NAME                                        READY     STATUS      RESTARTS   AGE
+	redis-bench-jgbj8                           0/1       Completed   0          1m
+	redis-deployment-75466795f6-thtx4           1/1       Running     0          16m
+
+	kubectl logs redis-bench-jgbj8

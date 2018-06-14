@@ -11,6 +11,7 @@ In the following sections we're going into a walk-through in kubernetes networki
    * [Exposing services](#exposing-services)
    * [Service discovery](#service-discovery)
    * [Accessing services](#accessing-services)
+   * [External services](#external-services)
 
 ## Pod Networking
 In a kubernetes cluster, when a pod is deployed, it gets an IP address from the cluster IP address range defined in the inital setup.
@@ -100,7 +101,7 @@ Create the pod and check the IP address
 However, with the ``hostNetwork: true`` we cannot start more than one pod listening on the same host port. In general, pods with host network are only used for system or daemon applications that do not need to be scaled.
 
 ## Exposing services
-In kubernetes, services are used not only to provides access to other pods inside the same cluster but also to clients outside the cluster. In this section, we're going to create a deploy of two nginx replicas and expose them to the external world via nginx service.
+In kubernetes, services are used not only to provides access to other pods inside the same cluster but also to clients outside the cluster. In this section, we're going to create a deploy of two nginx replicas and expose them to the external world via a nginx service.
 
 Create the deploy
 
@@ -156,27 +157,23 @@ spec:
 
 Any other pod in the cluster is able to access the nginx service without worring about pod IP addresses
 
-    [root@kubem00 ~]# kubectl create -f busybox.yaml
-    pod "busybox" created
+    kubectl create -f busybox.yaml
 
-    [root@kubem00 ~]# kubectl exec -it busybox sh
+    kubectl exec -it busybox sh
     / # wget -O - 10.254.247.153:80
     Welcome to nginx!
 
 However, the service is not reachable from any cluster host. If we try to access the service we do not get anything
 
-    [root@kubem00 ~]# curl 10.254.247.153:80
-    ^C
-    [root@kubem00 ~]#
+    curl 10.254.247.153:80
 
 Without specifying the type of service, kubernetes by default uses the ``Type: ClusterIP`` option, which means that the new service is only exposed only within the cluster. It is kind of like internal kubernetes service, so not particularly useful if you want to accept external traffic.
 
-When creating a service, kubernetes has four options of service types:
+When creating a service, kubernetes provides different options of service types:
 
-   * **ClusterIP**: it exposes the service only on a cluster internal IP making the service only reachable from within the cluster. This is the default Service Type.
+   * **ClusterIP**: it exposes the service only on a cluster internal IP making the service only reachable from within the cluster. This is the default service type.
    * **NodePort**: it exposes the service on each node public IP on a static port as defined in the NodePort option. It will be possible to access the service, from outside the cluster.
-   * **LoadBalancer**: it exposes the service by creating an external load balancer. It works only on some public cloud providers. *To make this working, remember to set the option ``--cloud-provider`` in the kube controller manager startup file*
-   * **ExternalName**: it maps the service to the contents of the externalName option, e.g. search.google.com, by returning a name record with its value.
+   * **LoadBalancer**: it exposes the service by creating an external load balancer. It works only on some public cloud providers. To make this working, remember to set the option ``--cloud-provider`` in the kube controller manager startup file.
 
 In this section we are going to use the NodePort service type to expose the service.
 
@@ -211,11 +208,7 @@ The NodePort type opens a service port on every worker node in the cluster. The 
     [root@kuben06 ~]# netstat -natp | grep 31608
     tcp6       0      0 :::31608                :::*                    LISTEN      863/kube-proxy
 
-The kube-proxy service on the worker node, is in charge of doing this job as reported in the picture
-
-![](../img/service-nodeport.png?raw=true)
-
-Now it is possible to access the nginx service from ouside the cluster by pointing to any worker node
+The kube-proxy service on the worker node, is in charge of doing this job by configuring the IPtables. Now it is possible to access the nginx service from ouside the cluster by pointing to any worker node
 
     [root@centos ~]# curl 10.10.10.85:31608
     Welcome to nginx!
@@ -223,7 +216,7 @@ Now it is possible to access the nginx service from ouside the cluster by pointi
     [root@centos ~]# curl 10.10.10.86:31608
     Welcome to nginx!
 
-The NodePort is randomly selected from the 30000-32767 range. If you want to force a specific port, define it in a file``nginx-nodeport-svc.yaml``  
+The NodePort is randomly selected from the 30000-32767 range. If you want to force a specific port, define it in a file ``nginx-nodeport-svc.yaml``  
     
 ```yaml
 apiVersion: v1
@@ -237,16 +230,43 @@ spec:
   - protocol: TCP
     port: 80
     targetPort: 80
-    nodePort: 8090
+    nodePort: 30080
   selector:
     run: nginx
   type: NodePort
 ```
 
-Now that we have a port open on every worker node, we can configure an external load balancer or edge router to route the traffic to any of the worker nodes.
+Now that we have a port open on every worker node, we can configure an external load balancer or edge router to route the traffic to any of the worker nodes. Please, note, the service port, if specified, must be in the range defined by the ``--service-node-port-range`` option in the Controller Manager configuration file.
+
+To use the LoadBalancer service type, delete the previous nginx service and change the configuration of the service as in the following ``nginx-loadbalancer-svc.yaml`` configuration file
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  labels:
+    run: nginx
+spec:
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  selector:
+    run: nginx
+  type: LoadBalancer
+```
+
+In this case, an external load balancer is created on top of the kubernetes worker nodes. This load balancer exposes on the Internet the service port specified in the file. In the example above, we have the nginx service exposed on port 80 of the load balancer. To check the public external IP assigned to the load balancer, inspect the service
+
+    kubectl get svc nginx -o wide
+    NAME            TYPE           CLUSTER-IP      EXTERNAL-IP      PORT(S)        AGE    SELECTOR
+    service/nginx   LoadBalancer   10.32.108.201   104.155.43.158   80:30473/TCP   40m    run=nginx
+
+By accessing the load balancer frontend on its public own IP and port 80, a client's request will be forwarded to the nginx pods passing through the service node port 30473. The service type LoadBalancer is quite expensive because, a separate load balancer will be created for each exposed service.
 
 ## Service discovery
-To enable service name discovery in a kubernetes cluster, we need to configure an embedded DNS service to resolve all DNS queries from pods trying to access services. The embedded DNS should be manually installed during cluster setup since it is part of the cluster architecture, unless users are going to use other custom solutions for service discovery, e.g. consul.
+To enable service name discovery in a kubernetes cluster, we need to configure an embedded DNS service to resolve all DNS queries from pods trying to access services. The embedded DNS should be manually installed during cluster setup since it is part of the cluster architecture, unless users are going to use other custom solutions for service discovery.
 
 The embedded DNS lives in the kube-system namespace
 
@@ -255,14 +275,14 @@ The embedded DNS lives in the kube-system namespace
     rc/kube-dns-v20   1         1         1         1d
 
     NAME           CLUSTER-IP     EXTERNAL-IP   PORT(S)         AGE
-    svc/kube-dns   10.254.3.100   <none>        53/UDP,53/TCP   1d
+    svc/kube-dns   10.32.0.10     <none>        53/UDP,53/TCP   1d
 
     NAME                    READY     STATUS    RESTARTS   AGE
     po/kube-dns-v20-3xk4v   3/3       Running   3          1d
 
 It consists of a controller, a service and a pod running a DNS server, a dnsmaq for caching and healthz for liveness probe. Each time a user starts a new pod, kubernetes injects certain nameservice lookup configuration into new pods allowing to query the DNS records in the cluster. Each time a new service is created, kubernetes registers this service name into the embedded DNS server allowing all pods to query the DNS server for service name resolution.
 
-Create a nginx deploy and create the service. Since we're not interested (yet) to expose the service outside the cluster, we leave the default service type, i.e. the ClusterIP mode. This allows only pods inside the cluster can access the service.
+Create a nginx deploy and create the service. Since we're not interested to expose the service outside the cluster, we leave the default service type, i.e. the ClusterIP mode. This allows only pods inside the cluster can access the service.
 
     kubectl create -f nginx-deploy.yaml
     deployment "nginx" created
@@ -274,7 +294,7 @@ Create a nginx deploy and create the service. Since we're not interested (yet) t
     NAME           DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
     deploy/nginx   2         2         2            2           3m
     NAME                CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-    svc/nginx-service   10.254.30.44   <none>        8080/TCP   33s
+    svc/nginx-service   10.32.0.44     <none>        8080/TCP   33s
     NAME                 DESIRED   CURRENT   READY     AGE
     rs/nginx-664452237   2         2         2         3m
     NAME                       READY     STATUS    RESTARTS   AGE
@@ -286,28 +306,64 @@ Start a test pod and check if it access the nginx service
     kubectl create -f busybox.yaml
     pod "busybox" created
 
-    kubectl exec -ti busybox -- wget 10.254.30.44:8080
-    Connecting to 10.254.30.44:8080 (10.254.30.44:8080)
+    kubectl exec -ti busybox -- wget 10.32.0.44:8080
     index.html  200 OK  
 
 Check if service DNS lookup configuration has been injectd by kubernetes
 
     kubectl exec -ti busybox -- cat /etc/resolv.conf
     search default.svc.cluster.local svc.cluster.local cluster.local
-    nameserver 10.254.3.100
-    nameserver 10.10.10.1
+    nameserver 10.32.0.10
     nameserver 8.8.8.8
     options ndots:5
 
 Now check if service discovery works by resolv the service name
 
     kubectl exec -ti busybox -- nslookup nginx-service
-    Server:    10.254.3.100
-    Address 1: 10.254.3.100 kube-dns.kube-system.svc.cluster.local
+    Server:    10.32.0.10
+    Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
     Name:      nginx-service
-    Address 1: 10.254.30.44 nginx-service.default.svc.cluster.local
+    Address 1: 10.32.0.44 nginx-service.default.svc.cluster.local
 
-This mechanism permits kubernetes pods to be linked each other without dealing with IP service assignment.
+By default, the Kubernetes DNS server returns the service's cluster IP address. This IP address is static throughout the lifetime of the service. When sending traffic to this IP the iptables on the node will load balance packets across the ready pods that match the selectors of the service. These iptables are programmed automatically by the kube-proxy service running on each node.
+
+If we want service discovery but would rather have the DNS service return the IP addresses of the pods rather than the service IP, we can provision the service with the ClusterIP field set to none which makes the service headless. In this case, the DNS server returns a list of A records that map the DNS name of the service to the A records of the running pods that match the service label selectors.
+
+For example, create a nginx service as in the ``nginx-headless-svc.yaml`` descriptor
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  labels:
+    run: nginx
+spec:
+  clusterIP: None
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  selector:
+    run: nginx
+```
+
+The service has missing IP
+
+    kubectl get svc
+    NAME        TYPE           CLUSTER-IP      EXTERNAL-IP      PORT(S)          AGE
+    nginx       ClusterIP      None            <none>           80/TCP           4m
+
+Now check the service discovery by resolving the service name
+
+    kubectl exec -it busybox -- nslookup nginx
+
+    Name:      nginx
+    Address 1: 10.38.2.5
+    Address 2: 10.38.2.6
+    Address 3: 10.38.2.7
+
+We see the DNS server responding with the pod's IP addresses.
 
 ## Accessing services
 In this section, we're going to deploy a WordPress application made of two services:
@@ -354,7 +410,7 @@ spec:
         - name: MARIADB_ROOT_PASSWORD
           value: bitnami123
         - name: MARIADB_DATABASE
-          value: workpress
+          value: wordpress
         - name: MARIADB_USER
           value: bitnami
         - name: MARIADB_PASSWORD
@@ -464,7 +520,7 @@ spec:
         - name: MARIADB_PORT
           value: '3306'
         - name: WORDPRESS_DATABASE_NAME
-          value: workpress
+          value: wordpress
         - name: WORDPRESS_DATABASE_USER
           value: bitnami
         - name: WORDPRESS_DATABASE_PASSWORD
