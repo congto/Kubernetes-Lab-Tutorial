@@ -1,5 +1,5 @@
 # Getting started with OpenShift
-It is now time to create the **Hello World** application using some sample code. It is simple http server written in nodejs returning a greating message as contained into the MESSAGE env variable. The application is available as Docker image and the source code is [here](https://github.com/kalise/nodejs-web-app).
+It is now time to create the **Hello World** application using some sample code. It is simple http server written in nodejs returning a greeting message as contained into the MESSAGE env variable. The application is available as Docker image and the source code is [here](https://github.com/kalise/nodejs-web-app).
 
 ## Create a demo user
 OpenShift platform supports a number of mechanisms for authentication. The simplest use case for testing purposes is htpasswd-based authentication. To start, we will need the ``htpasswd`` binary on the Master node
@@ -224,7 +224,7 @@ NAME                  CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
 hello-world-service   172.30.42.123   <none>        9000/TCP   5m
 ```
 
-The service will act as an internal load balancer in order to proxy the connections it receives from the clients toward the pods bound to the service. The service also provide a name resolution for the associated pods. For example, in the case above, the hello pods can be reached by other pods in the same namespace by the name ``hello-world-service`` instead of the address:port ``172.30.42.123:9000``. This is very useful when we need to link different applications.
+The service will act as an internal load balancer in order to proxy the connections it receives from the clients toward the pods bound to the service. The service also provide a name resolution for the associated pods. For example, in the case above, the hello pods can be reached by other pods in the same namespace by the name ``hello-world-service`` instead of the address:port ``172.30.42.123:9000``.
 
 ## Create a replica controller
 A Replica Controller ensures that a specified number of pod *"replicas"* are running at any time. In other words, a Replica Controller makes sure that a pod or set of pods are always up and available. If there are too many pods, it will kill some; if there are too few, it will start more.
@@ -318,103 +318,10 @@ oc get pods
 No resources found.
 ```
 
-## Create a Deployment
-A Deployment provides declarative updates for pods and replicas. The Deployment object defines the strategy for transitioning between deployments of the same application.
-
-In the ``deploy-hello-world.yaml`` file, define a deploy with Rolling Update strategy.
-```yaml
-kind: Deployment
-metadata:
-  generation: 1
-  name: deploy-hello
-  namespace:
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      name: hello
-  strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 1
-    type: RollingUpdate
-  template:
-    metadata:
-      labels:
-        name: hello
-    spec:
-      containers:
-      - env:
-        - name: MESSAGE
-          value: "Hello OpenShift"
-        name: hello
-        image: docker.io/kalise/nodejs-web-app:1.1
-        ports:
-        - name: http
-          containerPort: 8080
-          protocol: TCP
-        volumeMounts:
-        - mountPath: /var/log
-          name: logs
-        securityContext:
-          privileged: false
-          runAsUser: 1001250000
-      restartPolicy: Always
-      dnsPolicy: ClusterFirst
-      volumes:
-      - emptyDir: {}
-        name: logs
-      securityContext:
-        fsGroup: 1001250000
-```
-
-Create the Deployment
-
-    oc create -f deploy-hello-world.yaml
-
-    oc get deploy -o wide
-    NAME           DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
-    deploy-hello   3         3         3            3           14m
-
-and check the pods created
-
-    oc get pods 
-    NAME                            READY     STATUS    RESTARTS   AGE
-    deploy-hello-6564548567-4rtlg   1/1       Running   0          15m
-    deploy-hello-6564548567-qfrn4   1/1       Running   0          6m
-    deploy-hello-6564548567-tlsjx   1/1       Running   0          15m
-
-We also can check the Replica Set created by the Deployment
-
-    oc get rs -o wide
-    NAME                     DESIRED CURRENT READY AGE CONTAINERS IMAGES                     SELECTOR
-    deploy-hello-57db4fc656  3       3       3     2m  hello      kalise/nodejs-web-app:1.1  name=hello
-
-To see the rolling update in action, modify the deploy to use a different version of the same image
-
-    oc set image deploy deploy-hello hello=docker.io/kalise/nodejs-web-app:1.2
-    deployment "deploy-hello" image updated
-
-Now check the new Replica Set 
-
-    oc get rs -o wide
-    NAME                     DESIRED CURRENT READY AGE CONTAINERS IMAGES                     SELECTOR
-    deploy-hello-57db4fc656  0       0       0     20m hello      kalise/nodejs-web-app:1.1  name=hello
-    deploy-hello-68cdbc59f   3       3       3     3m  hello      kalise/nodejs-web-app:1.2  name=hello
-
-and the new pods
-
-    oc get pods
-    NAME                           READY     STATUS    RESTARTS   AGE
-    deploy-hello-68cdbc59f-gn44z   1/1       Running   0          5m
-    deploy-hello-68cdbc59f-hqclv   1/1       Running   0          2m
-    deploy-hello-68cdbc59f-rs8zc   1/1       Running   0          2m
-
-
 ## The Routing Layer
 The OpenShift routing layer is how client traffic enters the OpenShift environment so that it can ultimately reach pods. In our Hello World example, the service abstraction defines a logical set of pods enabling clients to refer the service by a consistent address and port. However, our service is not reachable from external clients.
 
-To get pods reachable from external clients we need for a Routing Layer. In a simplification of the process, the OpenShift Routing Layer consists in an instance of a pre-configured HAProxy running in a dedicated pod as well as the related services
+To get pods reachable from external clients we need for a Routing Layer. In a simplification of the process, the OpenShift Routing Layer consists in an instance of a pre-configured HAProxy running in a pod as well as the related service.
 
 The installation process installs a preconfigured router pod running on the master node. To see details, login as system admin
 ```
@@ -447,7 +354,7 @@ metadata:
   labels:
     name: hello
 spec:
-  host: hello-world.cloud.openshift.com
+  host: hello-world.openshift.noverit.com
   to:
     name: hello-world-service
   tls:
@@ -465,15 +372,15 @@ oc create -f route-hello-world.yaml
 
 oc get route
 NAME          HOST/PORT                         PATH      SERVICES              PORT      TERMINATION
-hello-route   hello-world.cloud.openshift.com             hello-world-service   <all>     edge
+hello-route   hello-world.openshift.noverit.com           hello-world-service   <all>     edge
 ```
 
 Now our Hello World service is reachable from any client with its FQDN
 ```
-curl https://hello-world.cloud.openshift.com -k
+curl https://hello-world.openshift.noverit.com -k
 ```
 
-In the setup, we required a wildcard DNS entry to point at the master node ``*.cloud.openshift.com. 300 IN  A 10.10.10.19`` Our wildcard DNS entry points to the public IP address of the master. Since there is only the master in the infra region, we know we can point the wildcard DNS entry at the master and we'll be all set. Once the FQDN request reaches the router pod running on the master node, it will be forwarded to the pods on the compute nodes actually running the Hello World application.
+In the setup, we required a wildcard DNS entry to point at the master node ``*.openshift.noverit.com. 300 IN  A 10.10.10.19`` Our wildcard DNS entry points to the public IP address of the master. Since there is only the master in the infra region, we know we can point the wildcard DNS entry at the master and we'll be all set. Once the FQDN request reaches the router pod running on the master node, it will be forwarded to the pods on the compute nodes actually running the Hello World application.
 
 The fowarding process is based on HAProxy configurations set by the route we defined before. To see the HAProxy configuration, login as root to the master node and inspect the router pod configuration
 ```
@@ -593,4 +500,183 @@ pod "hello-pod" created
 Also, the project admin (or the system admin) can give demo user the admin rights on tomcat project
 ```
 oc adm policy add-role-to-user admin demo
+```
+
+## Templates
+In OpenShift, a template describes a set of objects that can be parameterized and processed. A template can be processed to create anything we have permission to create within a given project, for example: pod, services, routes and deployment configurations. A template may also define a set of labels to apply to every object defined in the template.
+
+To getting started, here is a ``template-hello-world.yaml`` template file for our Hello World application looks like 
+```yaml
+apiVersion: v1
+kind: Template
+labels:
+  template: hello
+metadata:
+  annotations:
+    description: This is an example of application template in OpenShift
+    iconClass: default, icon-nodejs
+    tags: hello, world
+  name: hello-world-template
+  namespace:
+objects:
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: hello-world-service
+  spec:
+    ports:
+    - name: http
+      nodePort: 0
+      port: ${{SERVICE_PORT}}
+      protocol: TCP
+      targetPort: ${{INTERNAL_PORT}}
+    selector:
+      name: hello
+- apiVersion: v1
+  kind: Route
+  metadata:
+    labels:
+      name: hello
+    name: hello-world-route
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    tls:
+      termination: edge
+    to:
+      kind: Service
+      name: hello-world-service
+- apiVersion: v1
+  apiVersion: v1
+  kind: ReplicationController
+  metadata:
+    name: rc-hello
+  spec:
+    replicas: 1
+    selector:
+      name: hello
+    template:
+      metadata:
+        labels:
+          name: hello
+      spec:
+        containers:
+        - env:
+          - name: MESSAGE
+            value: ${GREETING_MESSAGE}
+          name: hello
+          image: docker.io/kalise/nodejs-web-app:latest
+          ports:
+          - name: http
+            containerPort: ${{INTERNAL_PORT}}
+            protocol: TCP
+          volumeMounts:
+          - mountPath: /var/log
+            name: logs
+          securityContext:
+            privileged: false
+            runAsUser: 1001250000
+        restartPolicy: Always
+        dnsPolicy: ClusterFirst
+        volumes:
+        - emptyDir: {}
+          name: logs
+        securityContext:
+          fsGroup: 1001250000
+parameters:
+- description: The exposed hostname that will route to the Hello World service
+  name: APPLICATION_DOMAIN
+  value: "hello-world.openshift.noverit.com"
+  required: true
+- description: The internal port used by the pods
+  name: INTERNAL_PORT
+  value: "8080"
+  required: true
+- description: The port exposed by the service
+  name: SERVICE_PORT
+  value: "9000"
+  required: true
+- description: Greeting message
+  name: GREETING_MESSAGE
+  value: "Hello OpenShift"
+```
+
+We can see many of the items already we know: a service, a route and a replica controller and related pod definition. We also see the use of parametric values. These parameters are useful when create a new application.
+
+In the current namespaces, add the template
+```
+oc create -f template-hello-world.yaml
+```
+
+List existing templates
+
+```
+oc get templates
+
+NAME                   DESCRIPTION                                               PARAMETERS    OBJECTS
+hello-world-template   This is an example of application template in OpenShift   4 (all set)   3
+```
+
+List the parameters that can be override
+```
+oc process --parameters hello-world-template
+NAME                 DESCRIPTION                          GENERATOR   VALUE
+APPLICATION_DOMAIN   The exposed hostname that ..                     hello-world.openshift.noverit.com
+INTERNAL_PORT        The internal port used by the pods               8080
+SERVICE_PORT         The port exposed by the service                  9000
+GREETING_MESSAGE     Greeting message                                 Hello OpenShift
+```
+Note we passed the value of the env variable ``MESSAGE`` as a value in the ``GREETING_MESSAGE`` template parameter.
+
+Modify an existing template
+```
+oc edit template hello-world-template
+```
+
+Rather than writing an entire template from scratch, we can also export existing objects in template form, and then modify the template from there by adding parameters and other customizations.
+
+Export existing objects in the project in a template form:
+
+```
+oc create -f pod-hello-world-limited.yaml
+pod "hello-pod" created
+
+oc get all
+NAME           READY     STATUS    RESTARTS   AGE
+po/hello-pod   1/1       Running   0          18s
+
+oc export all --as-template=new-template -o yaml > new-template.yaml
+```
+
+## Create an application from a template
+OpenShift users can create an application from a previously stored template or from a template file, by specifying the name of the template as an argument.
+
+Create the Hello World application by the template
+```
+oc new-app --template=hello-world-template
+--> Deploying template "openshift/hello-world-template" to project demo
+
+     hello-world-template
+     ---------
+     This is an example of application template in OpenShift 3
+
+     * With parameters:
+        * APPLICATION_DOMAIN=hello-world.cloud.openshift.com
+        * INTERNAL_PORT=8080
+        * SERVICE_PORT=9000
+
+--> Creating resources ...
+    service "hello-world-service" created
+    route "hello-world-route" created
+    replicationcontroller "hello-world-rc" created
+--> Success
+    Run 'oc status' to view your app.
+```
+
+When creating an application based on a template, users can set parameter values defined by the template
+```
+oc new-app --template=hello-world-template -p \
+           APPLICATION_DOMAIN=myapp.openshift.noverit.com \
+           INTERNAL_PORT=8088 \
+           SERVICE_PORT=5680
+           GREETING_MESSAGE="Hello OpenShift"
 ```
